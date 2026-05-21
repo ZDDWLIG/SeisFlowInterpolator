@@ -70,8 +70,4 @@ class seis_dataset(data.Dataset):
         else:
             raise ValueError(f"Unknown mask_mode: {self.mask_mode}")
 
-        max_val = masked.abs().max().item() + 1e-8
-        masked = masked / max_val
-        clean = clean / max_val
-
         return masked, clean, mask
