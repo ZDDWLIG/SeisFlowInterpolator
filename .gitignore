@@ -29,5 +29,8 @@ Thumbs.db
 *.pth
 *.pt
 
+# Visualization output (generated data)
+vis_data*/
+
 # Claude config
 .claude/

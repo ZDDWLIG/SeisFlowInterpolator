@@ -42,9 +42,13 @@ class seis_dataset(data.Dataset):
         mask_ratio = np.random.uniform(min_r, max_r)
         num_mask = max(1, int(W * mask_ratio))
 
+        # 构建显式 mask: 1=缺失, 0=已知
+        mask = torch.zeros_like(masked)
+
         if self.mask_mode == "random":
             mask_cols = np.random.choice(W, num_mask, replace=False)
             masked[:, :, mask_cols] = 0
+            mask[:, :, mask_cols] = 1
 
         elif self.mask_mode == "uniform":
             # Evenly-space mask columns across the full width
@@ -55,11 +59,13 @@ class seis_dataset(data.Dataset):
             mask_cols = np.clip((positions + jitter).astype(int), 0, W - 1)
             mask_cols = np.unique(mask_cols)
             masked[:, :, mask_cols] = 0
+            mask[:, :, mask_cols] = 1
 
         elif self.mask_mode == "large_gap":
             # One contiguous block of missing columns
             gap_start = np.random.randint(0, W - num_mask)
             masked[:, :, gap_start:gap_start + num_mask] = 0
+            mask[:, :, gap_start:gap_start + num_mask] = 1
 
         else:
             raise ValueError(f"Unknown mask_mode: {self.mask_mode}")
@@ -68,4 +74,4 @@ class seis_dataset(data.Dataset):
         masked = masked / max_val
         clean = clean / max_val
 
-        return masked, clean
+        return masked, clean, mask

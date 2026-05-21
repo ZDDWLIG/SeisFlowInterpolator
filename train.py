@@ -52,12 +52,13 @@ def train(model, train_loader, val_loader, optimizer, device, epochs=30, checkpo
         model.train()
         total_train_loss = 0.0
 
-        # dataset 返回的是 (masked, clean)，且已经在 GPU 上
-        for x_cond, x0 in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [train]"):
+        # dataset 返回的是 (masked, clean, mask)
+        for x_cond, x0, mask in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [train]"):
             # 注意：dataset.py 已经将数据放到了 device 上，这里可以直接用
             # 但为了保险起见（防止 device 字符串不一致），保留 .to(device) 是安全的
             x0 = x0.to(device)
             x_cond = x_cond.to(device)
+            mask = mask.to(device)
             B = x0.size(0)
 
             t_model = torch.rand(B, device=device)          # [B]
@@ -65,9 +66,9 @@ def train(model, train_loader, val_loader, optimizer, device, epochs=30, checkpo
 
             # 计算 flow matching 目标
             x_t, v_star, _ = compute_xt_and_velocity(x0, t_cf)
-            
-            # 模型输入：当前噪声状态 x_t, 时间 t, 条件 x_cond (masked image)
-            v_pred = model(x_t, t_model, x_cond)
+
+            # 模型输入：当前噪声状态 x_t, 时间 t, 条件 x_cond (masked image), mask
+            v_pred = model(x_t, t_model, x_cond, mask)
 
             loss = F.mse_loss(v_pred, v_star)
             total_train_loss += loss.item()
@@ -94,16 +95,17 @@ def train(model, train_loader, val_loader, optimizer, device, epochs=30, checkpo
         model.eval()
         total_val_loss = 0.0
         with torch.no_grad():
-            for val_cond, val_clean in val_loader:
+            for val_cond, val_clean, val_mask in val_loader:
                 val_clean = val_clean.to(device)
                 val_cond = val_cond.to(device)
+                val_mask = val_mask.to(device)
                 B_val = val_clean.size(0)
 
                 t_model_val = torch.rand(B_val, device=device)
                 t_cf_val = t_model_val.unsqueeze(1)
 
                 x_t_val, v_star_val, _ = compute_xt_and_velocity(val_clean, t_cf_val)
-                v_pred_val = model(x_t_val, t_model_val, val_cond)
+                v_pred_val = model(x_t_val, t_model_val, val_cond, val_mask)
 
                 val_loss = F.mse_loss(v_pred_val, v_star_val)
                 total_val_loss += val_loss.item()
@@ -126,12 +128,13 @@ def train(model, train_loader, val_loader, optimizer, device, epochs=30, checkpo
         # ----------- 验证采样可视化 (去噪/插值过程) -----------
         try:
             # 获取一个验证集样本
-            sample_masked, sample_clean = next(iter(val_loader))
+            sample_masked, sample_clean, sample_mask = next(iter(val_loader))
             sample_masked = sample_masked[0:1].to(device)
             sample_clean = sample_clean[0:1].to(device)
+            sample_mask = sample_mask[0:1].to(device)
 
             # 执行采样：输入是 Masked 图像作为 Condition
-            denoised_image = denoise_sample(model, sample_masked, steps=50, device=device, save_velocity=False)
+            denoised_image = denoise_sample(model, sample_masked, sample_mask, steps=50, device=device, save_velocity=False)
 
             save_sample_fig(
                 noisy=sample_masked,

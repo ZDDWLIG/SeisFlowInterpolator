@@ -93,6 +93,7 @@ class UNet(nn.Module):
                  out_dim=None,
                  dim_mults=(1, 2, 4, 8),
                  channels=1,
+                 cond_channels=2,   # number of condition channels: 2 for (cond+mask), 1 for cond-only
                  with_time_emb=True,
                  self_attention=False,
                  resnet_block_groups=8):
@@ -100,10 +101,11 @@ class UNet(nn.Module):
 
         # determine dimensions
         self.channels = channels
+        self.cond_channels = cond_channels
         # init_dim = default(init_dim, dim // 3 * 2)
-        init_dim = default(init_dim, dim) 
+        init_dim = default(init_dim, dim)
 
-        self.init_conv = nn.Conv2d(channels + 1, init_dim, 7, padding=3) # input channel becomes 2 (x, cond)
+        self.init_conv = nn.Conv2d(channels + cond_channels, init_dim, 7, padding=3)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -149,8 +151,14 @@ class UNet(nn.Module):
         self.final_res_block = ResnetBlock(dim, dim, time_emb_dim=time_dim)
         self.final_conv = nn.Conv2d(dim, out_dim or channels, 1)
 
-    def forward(self, x, t, cond):
-        x = torch.cat([x, cond], dim=1)
+    def forward(self, x, t, *conds):
+        """
+        x: noisy image (B, channels, H, W)
+        t: time (B,) or (B, 1)
+        conds: variable number of condition tensors, each (B, C_i, H, W)
+               total C_i must equal self.cond_channels
+        """
+        x = torch.cat([x] + list(conds), dim=1)
         
         t = self.time_mlp(t) if exists(self.time_mlp) else None
 

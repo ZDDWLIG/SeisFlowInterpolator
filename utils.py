@@ -178,10 +178,10 @@ def visualize_vector_field(v_star, v_pred, epoch, save_dir="./vis"):
 #     return x_t # 假设数据范围是[-1, 1]
 
 
-def denoise_sample(model, x_cond, steps=100, device='cpu', save_velocity=True, save_dir='./velocity_fields'):
+def denoise_sample(model, x_cond, mask, steps=100, device='cpu', save_velocity=True, save_dir='./velocity_fields'):
     model.eval()
-    
-    # 初始化
+
+    # 从 masked 图像起始
     x_t = x_cond.clone()
     time_steps = torch.linspace(1, 0, steps + 1, device=device)
     velocity_list = []
@@ -193,23 +193,30 @@ def denoise_sample(model, x_cond, steps=100, device='cpu', save_velocity=True, s
             t_now = time_steps[i]
             t_next = time_steps[i+1]
             t_model = t_now.expand(x_t.shape[0])
-            
-            # 预测速度场
-            v_pred = model(x_t, t_model, x_cond)
 
             sigma_now = sigma_t(t_now.view(-1, 1, 1, 1))
             sigma_next = sigma_t(t_next.view(-1, 1, 1, 1))
 
+            # 预测速度场
+            v_pred = model(x_t, t_model, x_cond, mask)
+
+            # ODE step: x0_pred = x_t + sigma * v_pred
             x0_pred = x_t + sigma_now * v_pred
             direction_from_x0 = x_t - x0_pred
-            x_t = x0_pred + direction_from_x0 * (sigma_next / sigma_now)
-            
-            # 记录速度场
+            x_next = x0_pred + direction_from_x0 * (sigma_next / sigma_now)
+
+            # 数据一致性: 已知区 = clean + 对应噪声水平的噪声
+            noise_known = torch.randn_like(x_next)
+            x_next_known = x_cond + sigma_next * noise_known
+            x_next = mask * x_next + (1 - mask) * x_next_known
+
+            x_t = x_next
+
             if save_velocity:
                 velocity_list.append(v_pred.cpu().numpy())
 
     if save_velocity:
-        velocity_array = np.stack(velocity_list, axis=0)  # shape: [steps, B, C, H, W]
+        velocity_array = np.stack(velocity_list, axis=0)
         np.save(os.path.join(save_dir, 'velocity_fields.npy'), velocity_array)
         print(f"✅ 已保存速度场序列到 {save_dir}/velocity_fields.npy")
 

@@ -1,8 +1,9 @@
 """
 Convert SEG-Y file to 2D .npy patches for Flow Matching interpolation training.
 
-Organization: for each section (grouped by crossline or inline), collect traces,
-sort by the other spatial dimension + offset, then sliding-window patches are cut.
+Organization: group traces into sections by crossline (or inline), keep original
+trace order within each section, then sliding-window patches are cut top-to-bottom,
+left-to-right.
 
 Usage:
     python sgy_to_patches.py \
@@ -22,11 +23,13 @@ def parse_args():
     p = argparse.ArgumentParser(description="Convert SEG-Y to training patches")
     p.add_argument("--sgy_path", type=str, required=True)
     p.add_argument("--out_dir", type=str, required=True)
-    p.add_argument("--group_by", type=str, default="crossline",
+    p.add_argument("--group_by", type=str, default="inline",
                    choices=["crossline", "inline"],
                    help="Group traces by crossline or inline to form 2D sections")
-    p.add_argument("--patch_size", type=int, default=256)
-    p.add_argument("--stride", type=int, default=None)
+    p.add_argument("--patch_size", type=int, nargs='+', default=[256],
+                   help="Patch size: single int for square, or 'H W' for rectangle (time x trace)")
+    p.add_argument("--stride", type=int, nargs='+', default=None,
+                   help="Stride: single int or 'H W'. Default: half of patch_size")
     p.add_argument("--min_traces_per_section", type=int, default=256,
                    help="Skip sections with fewer traces than this")
     return p.parse_args()
@@ -40,7 +43,6 @@ def extract_sections(sgy_path, group_by="crossline", min_traces_per_section=256)
     """
     TraceField = segyio.TraceField
     primary_field = TraceField.CROSSLINE_3D if group_by == "crossline" else TraceField.INLINE_3D
-    secondary_field = TraceField.INLINE_3D if group_by == "crossline" else TraceField.CROSSLINE_3D
     primary_name = group_by
 
     print(f"Reading {sgy_path} (group_by={group_by}) ...")
@@ -70,19 +72,13 @@ def extract_sections(sgy_path, group_by="crossline", min_traces_per_section=256)
             if grp_key in valid_keys:
                 grp_trace_indices[grp_key].append(i)
 
-        # Build sections
+        # Build sections — keep original trace order (as they appear in the file)
         sections = {}
         for grp_key in valid_keys:
-            indices = grp_trace_indices[grp_key]
-            meta = [(i,
-                     f.header[i][secondary_field],
-                     f.header[i][TraceField.offset])
-                    for i in indices]
-            meta.sort(key=lambda x: (x[1], x[2]))
-            sorted_indices = [m[0] for m in meta]
+            indices = grp_trace_indices[grp_key]  # already in file order
 
-            section = np.zeros((n_samples, len(sorted_indices)), dtype=np.float32)
-            for j, idx in enumerate(sorted_indices):
+            section = np.zeros((n_samples, len(indices)), dtype=np.float32)
+            for j, idx in enumerate(indices):
                 section[:, j] = f.trace[idx]
 
             sections[grp_key] = section
@@ -91,17 +87,31 @@ def extract_sections(sgy_path, group_by="crossline", min_traces_per_section=256)
     return sections
 
 
-def cut_patches(section, patch_size, stride):
+def cut_patches(section, patch_h, patch_w, stride_h, stride_w):
     """Yield patches from a 2D section (time × trace)."""
     rows, cols = section.shape
-    for i in range(0, rows - patch_size + 1, stride):
-        for j in range(0, cols - patch_size + 1, stride):
-            yield section[i:i + patch_size, j:j + patch_size]
+    for i in range(0, rows - patch_h + 1, stride_h):
+        for j in range(0, cols - patch_w + 1, stride_w):
+            yield section[i:i + patch_h, j:j + patch_w]
 
 
 def main():
     args = parse_args()
-    stride = args.stride if args.stride is not None else args.patch_size // 2
+
+    # Unpack patch_size: single int → square, two ints → (H, W) = (time, trace)
+    ps = args.patch_size
+    patch_h = ps[0]
+    patch_w = ps[1] if len(ps) > 1 else ps[0]
+
+    if args.stride is not None:
+        st = args.stride
+        stride_h = st[0]
+        stride_w = st[1] if len(st) > 1 else st[0]
+    else:
+        stride_h = patch_h // 2
+        stride_w = patch_w // 2
+
+    print(f"Patch size: {patch_h} (time) × {patch_w} (trace), stride: {stride_h}×{stride_w}")
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -113,19 +123,19 @@ def main():
 
     for grp_key, section in sections.items():
         rows, cols = section.shape
-        if cols < args.patch_size or rows < args.patch_size:
-            print(f"  Skipping {prefix}={grp_key}: shape=({rows},{cols}) < patch_size")
+        if cols < patch_w or rows < patch_h:
+            print(f"  Skipping {prefix}={grp_key}: shape=({rows},{cols}) < patch ({patch_h},{patch_w})")
             total_skipped += 1
             continue
 
         col_nz = np.any(section != 0, axis=0)
-        if np.sum(col_nz) < args.patch_size:
-            print(f"  Skipping {prefix}={grp_key}: only {np.sum(col_nz)} non-zero columns")
+        if np.sum(col_nz) < patch_w:
+            print(f"  Skipping {prefix}={grp_key}: only {np.sum(col_nz)} non-zero columns, need {patch_w}")
             total_skipped += 1
             continue
 
         count = 0
-        for patch in cut_patches(section, args.patch_size, stride):
+        for patch in cut_patches(section, patch_h, patch_w, stride_h, stride_w):
             if np.max(np.abs(patch)) < 1e-8:
                 continue
             fname = f"{prefix}_{grp_key}_{count:05d}.npy"
