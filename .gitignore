@@ -1,0 +1,33 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Checkpoints & results (large files)
+checkpoints/
+results/
+velocity_fields/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# PyTorch
+*.pth
+*.pt
+
+# Claude config
+.claude/
